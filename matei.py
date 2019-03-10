@@ -7,6 +7,7 @@ from keras import models, layers, regularizers, optimizers
 from sklearn.metrics import log_loss
 from sklearn.model_selection import KFold
 
+model_name = 'pretrained-mlp'
 dense_layer_sizes = [37]
 dropout_rate = 0.6
 learning_rate = 0.001
@@ -123,7 +124,8 @@ for fold_n, (train_index, valid_index) in enumerate(folds.split(X_train)):
     # Define the model, re-initializing for each fold
     classif_model = build_mlp_model([X_train.shape[1]])
     classif_model.compile(optimizer=optimizers.Adam(lr=learning_rate), loss='categorical_crossentropy')
-    callbacks = [kc.EarlyStopping(monitor='val_loss', patience=patience, restore_best_weights=True)]
+    callbacks = [kc.EarlyStopping(monitor='val_loss', patience=patience, restore_best_weights=True),
+                 kc.TensorBoard(log_dir=f'logs/{model_name}/{fold_n}')]
 
     # train the model
     classif_model.fit(x=X_tr, y=Y_tr, epochs=epochs, batch_size=batch_size, callbacks=callbacks,
@@ -148,4 +150,4 @@ submission = pd.read_csv('input/sample_submission_stage_1.csv', index_col='ID')
 submission['A'] = prediction[:, 0]
 submission['B'] = prediction[:, 1]
 submission['NEITHER'] = prediction[:, 2]
-submission.to_csv('output/submission_bert.csv')
+submission.to_csv(f'output/{model_name}.csv')
