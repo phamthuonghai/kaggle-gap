@@ -37,27 +37,28 @@ def run_bert(data_name):
     Input: data, a pandas DataFrame containing the information in one of the GAP files
 
     Output: emb, a pandas DataFrame containing contextual embeddings for the words A, B and Pronoun.
-            Each embedding is a numpy array of shape (768)
+            Each embedding is a numpy array of shape (1024)
     columns: "emb_A": the embedding for word A
              "emb_B": the embedding for word B
              "emb_P": the embedding for the pronoun
              "label": the answer to the coreference problem: "A", "B" or "NEITHER"
     """
+    model_name = 'uncased_L-24_H-1024_A-16'
     data = pd.read_csv(f'input/{data_name}.tsv', sep='\t')
     text = data['Text']
     text.to_csv(f'data/{data_name}.txt', index=False, header=False)
 
     os.system(f'python bert/extract_features.py \
     --input_file=data/{data_name}.txt \
-    --output_file=data/all-emb-{data_name}.jsonl \
-    --vocab_file=pretrained/uncased_L-12_H-768_A-12/vocab.txt \
-    --bert_config_file=pretrained/uncased_L-12_H-768_A-12/bert_config.json \
-    --init_checkpoint=pretrained/uncased_L-12_H-768_A-12/bert_model.ckpt \
+    --output_file=data/large-all-emb-{data_name}.jsonl \
+    --vocab_file=pretrained/{model_name}/vocab.txt \
+    --bert_config_file=pretrained/{model_name}/bert_config.json \
+    --init_checkpoint=pretrained/{model_name}/bert_model.ckpt \
     --layers=-1 \
     --max_seq_length=256 \
     --batch_size=8')
 
-    bert_output = pd.read_json(f'data/all-emb-{data_name}.jsonl', lines=True)
+    bert_output = pd.read_json(f'data/large-all-emb-{data_name}.jsonl', lines=True)
 
     index = data.index
     columns = ['emb_A', 'emb_B', 'emb_P', 'label']
@@ -79,9 +80,9 @@ def run_bert(data_name):
         B_length = count_length_no_special(B)
 
         # Initialize embeddings with zeros
-        emb_A = np.zeros(768)
-        emb_B = np.zeros(768)
-        emb_P = np.zeros(768)
+        emb_A = np.zeros(1024)
+        emb_B = np.zeros(1024)
+        emb_P = np.zeros(1024)
 
         # Initialize counts
         count_chars = 0
@@ -128,11 +129,11 @@ def run_bert(data_name):
 
 print('Started at ', time.ctime())
 test_emb = run_bert('gap-test')
-test_emb.to_json('data/emb-gap-test.json', orient='columns')
+test_emb.to_json('data/large-emb-gap-test.json', orient='columns')
 
 validation_emb = run_bert('gap-validation')
-validation_emb.to_json('data/emb-gap-validation.json', orient='columns')
+validation_emb.to_json('data/large-emb-gap-validation.json', orient='columns')
 
 development_emb = run_bert('gap-development')
-development_emb.to_json('data/emb-gap-development.json', orient='columns')
+development_emb.to_json('data/large-emb-gap-development.json', orient='columns')
 print('Finished at ', time.ctime())

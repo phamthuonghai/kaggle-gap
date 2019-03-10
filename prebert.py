@@ -57,7 +57,7 @@ def parse_json(embeddings):
     """
     embeddings.sort_index(
         inplace=True)  # Sorting the DataFrame, because reading from the json file messed with the order
-    X = np.zeros((len(embeddings), 3 * 768))
+    X = np.zeros((len(embeddings), 3 * 1024))
     Y = np.zeros((len(embeddings), 3))
 
     # Concatenate features
@@ -81,13 +81,13 @@ def parse_json(embeddings):
 
 
 # Read development embeddings from json file - this is the output of Bert
-development = pd.read_json('data/emb-gap-development.json')
+development = pd.read_json('data/large-emb-gap-development.json')
 X_development, Y_development = parse_json(development)
 
-validation = pd.read_json('data/emb-gap-validation.json')
+validation = pd.read_json('data/large-emb-gap-validation.json')
 X_validation, Y_validation = parse_json(validation)
 
-test = pd.read_json('data/emb-gap-test.json')
+test = pd.read_json('data/large-emb-gap-test.json')
 X_test, Y_test = parse_json(test)
 
 # There may be a few NaN values, where the offset of a target word is greater than the max_seq_length of BERT.
@@ -102,7 +102,7 @@ Y_validation = np.delete(Y_validation, remove_validation, 0)
 
 # We want predictions for all development rows. So instead of removing rows, make them 0
 remove_development = [row for row in range(len(X_development)) if np.sum(np.isnan(X_development[row]))]
-X_development[remove_development] = np.zeros(3 * 768)
+X_development[remove_development] = np.zeros(3 * 1024)
 
 # Will train on data from the gap-test and gap-validation files, in total 2454 rows
 X_train = np.concatenate((X_test, X_validation), axis=0)
