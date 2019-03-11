@@ -202,7 +202,7 @@ class BertModel(object):
 
         # Run the stacked transformer.
         # `sequence_output` shape = [batch_size, seq_length, hidden_size].
-        self.all_encoder_layers = transformer_model(
+        self.all_encoder_layers, self.all_encoder_attention_matrices = transformer_model(
             input_tensor=self.embedding_output,
             attention_mask=attention_mask,
             hidden_size=config.hidden_size,
@@ -245,6 +245,9 @@ class BertModel(object):
 
   def get_all_encoder_layers(self):
     return self.all_encoder_layers
+
+  def get_all_encoder_attention_matrices(self):
+    return self.all_encoder_attention_matrices
 
   def get_embedding_output(self):
     """Gets output of the embedding lookup (i.e., input to the transformer).
@@ -316,7 +319,6 @@ def get_activation(activation_string):
 
 def get_assignment_map_from_checkpoint(tvars, init_checkpoint):
   """Compute the union of the current variables and checkpoint variables."""
-  assignment_map = {}
   initialized_variable_names = {}
 
   name_to_variable = collections.OrderedDict()
@@ -338,7 +340,7 @@ def get_assignment_map_from_checkpoint(tvars, init_checkpoint):
     initialized_variable_names[name] = 1
     initialized_variable_names[name + ":0"] = 1
 
-  return (assignment_map, initialized_variable_names)
+  return assignment_map, initialized_variable_names
 
 
 def dropout(input_tensor, dropout_prob):
@@ -422,7 +424,7 @@ def embedding_lookup(input_ids,
 
   output = tf.reshape(output,
                       input_shape[0:-1] + [input_shape[-1] * embedding_size])
-  return (output, embedding_table)
+  return output, embedding_table
 
 
 def embedding_postprocessor(input_tensor,
@@ -646,7 +648,7 @@ def attention_layer(from_tensor,
     from_seq_length = from_shape[1]
     to_seq_length = to_shape[1]
   elif len(from_shape) == 2:
-    if (batch_size is None or from_seq_length is None or to_seq_length is None):
+    if batch_size is None or from_seq_length is None or to_seq_length is None:
       raise ValueError(
           "When passing in rank 2 tensors to attention_layer, the values "
           "for `batch_size`, `from_seq_length`, and `to_seq_length` "
@@ -748,7 +750,7 @@ def attention_layer(from_tensor,
         context_layer,
         [batch_size, from_seq_length, num_attention_heads * size_per_head])
 
-  return context_layer
+  return context_layer, attention_probs
 
 
 def transformer_model(input_tensor,
@@ -823,6 +825,7 @@ def transformer_model(input_tensor,
   prev_output = reshape_to_matrix(input_tensor)
 
   all_layer_outputs = []
+  all_attention_matrices = []
   for layer_idx in range(num_hidden_layers):
     with tf.variable_scope("layer_%d" % layer_idx):
       layer_input = prev_output
@@ -830,7 +833,7 @@ def transformer_model(input_tensor,
       with tf.variable_scope("attention"):
         attention_heads = []
         with tf.variable_scope("self"):
-          attention_head = attention_layer(
+          attention_head, attention_probs = attention_layer(
               from_tensor=layer_input,
               to_tensor=layer_input,
               attention_mask=attention_mask,
@@ -844,7 +847,8 @@ def transformer_model(input_tensor,
               to_seq_length=seq_length)
           attention_heads.append(attention_head)
 
-        attention_output = None
+        all_attention_matrices.append(attention_probs)
+
         if len(attention_heads) == 1:
           attention_output = attention_heads[0]
         else:
@@ -886,10 +890,10 @@ def transformer_model(input_tensor,
     for layer_output in all_layer_outputs:
       final_output = reshape_from_matrix(layer_output, input_shape)
       final_outputs.append(final_output)
-    return final_outputs
+    return final_outputs, all_attention_matrices
   else:
     final_output = reshape_from_matrix(prev_output, input_shape)
-    return final_output
+    return final_output, all_attention_matrices[-1]
 
 
 def get_shape_list(tensor, expected_rank=None, name=None):
@@ -933,8 +937,7 @@ def reshape_to_matrix(input_tensor):
   """Reshapes a >= rank 2 tensor to a rank 2 tensor (i.e., a matrix)."""
   ndims = input_tensor.shape.ndims
   if ndims < 2:
-    raise ValueError("Input tensor must have at least rank 2. Shape = %s" %
-                     (input_tensor.shape))
+    raise ValueError("Input tensor must have at least rank 2. Shape = %s" % input_tensor.shape)
   if ndims == 2:
     return input_tensor
 

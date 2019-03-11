@@ -1,32 +1,17 @@
 # coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Extract pre-computed feature vectors from BERT."""
+"""Extract pre-computed attention matrix from BERT."""
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import codecs
 import collections
-import json
+import pickle
 
 import modeling
 import tokenization
+from extract_utils import input_fn_builder, convert_examples_to_features, read_examples
 import tensorflow as tf
-
-from extract_utils import input_fn_builder, model_fn_builder, convert_examples_to_features, read_examples
 
 flags = tf.flags
 
@@ -79,6 +64,68 @@ flags.DEFINE_bool(
     "since it is much faster.")
 
 
+def model_fn_builder(bert_config, init_checkpoint, layer_indexes, use_tpu,
+                     use_one_hot_embeddings):
+  """Returns `model_fn` closure for TPUEstimator."""
+
+  def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
+    """The `model_fn` for TPUEstimator."""
+
+    unique_ids = features["unique_ids"]
+    input_ids = features["input_ids"]
+    input_mask = features["input_mask"]
+    input_type_ids = features["input_type_ids"]
+
+    model = modeling.BertModel(
+        config=bert_config,
+        is_training=False,
+        input_ids=input_ids,
+        input_mask=input_mask,
+        token_type_ids=input_type_ids,
+        use_one_hot_embeddings=use_one_hot_embeddings)
+
+    if mode != tf.estimator.ModeKeys.PREDICT:
+      raise ValueError("Only PREDICT modes are supported: %s" % mode)
+
+    tvars = tf.trainable_variables()
+    scaffold_fn = None
+    (assignment_map,
+     initialized_variable_names) = modeling.get_assignment_map_from_checkpoint(
+         tvars, init_checkpoint)
+    if use_tpu:
+
+      def tpu_scaffold():
+        tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+        return tf.train.Scaffold()
+
+      scaffold_fn = tpu_scaffold
+    else:
+      tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+
+    tf.logging.info("**** Trainable Variables ****")
+    for var in tvars:
+      init_string = ""
+      if var.name in initialized_variable_names:
+        init_string = ", *INIT_FROM_CKPT*"
+      tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
+                      init_string)
+
+    all_layers = model.get_all_encoder_attention_matrices()
+
+    predictions = {
+        "unique_id": unique_ids,
+    }
+
+    for (i, layer_index) in enumerate(layer_indexes):
+      predictions["attention_matrix_%d" % i] = all_layers[layer_index]
+
+    output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+        mode=mode, predictions=predictions, scaffold_fn=scaffold_fn)
+    return output_spec
+
+  return model_fn
+
+
 def main(_):
   tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -120,33 +167,23 @@ def main(_):
       config=run_config,
       predict_batch_size=FLAGS.batch_size)
 
-  input_fn = input_fn_builder(
-      features=features, seq_length=FLAGS.max_seq_length)
+  input_fn = input_fn_builder(features=features, seq_length=FLAGS.max_seq_length)
 
-  with codecs.getwriter("utf-8")(tf.gfile.Open(FLAGS.output_file,
-                                               "w")) as writer:
+  with open(FLAGS.output_file, 'wb')as f:
     for result in estimator.predict(input_fn, yield_single_examples=True):
       unique_id = int(result["unique_id"])
       feature = unique_id_to_feature[unique_id]
       output_json = collections.OrderedDict()
       output_json["linex_index"] = unique_id
-      all_features = []
-      for (i, token) in enumerate(feature.tokens):
-        all_layers = []
-        for (j, layer_index) in enumerate(layer_indexes):
-          layer_output = result["layer_output_%d" % j]
-          layers = collections.OrderedDict()
-          layers["index"] = layer_index
-          layers["values"] = [
-              round(float(x), 6) for x in layer_output[i:(i + 1)].flat
-          ]
-          all_layers.append(layers)
-        features = collections.OrderedDict()
-        features["token"] = token
-        features["layers"] = all_layers
-        all_features.append(features)
-      output_json["features"] = all_features
-      writer.write(json.dumps(output_json) + "\n")
+      all_layers = []
+      for (j, layer_index) in enumerate(layer_indexes):
+        layers = collections.OrderedDict()
+        layers["index"] = layer_index
+        layers["values"] = result["attention_matrix_%d" % j]
+        all_layers.append(layers)
+      output_json["tokens"] = feature.tokens
+      output_json["attentions"] = all_layers
+      pickle.dump(output_json, f)
 
 
 if __name__ == "__main__":
