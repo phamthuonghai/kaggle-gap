@@ -8,7 +8,6 @@ from __future__ import print_function
 import itertools
 import pickle
 
-import numpy as np
 import pandas as pd
 import tensorflow as tf
 
@@ -184,31 +183,32 @@ def main(_):
         feature = unique_id_to_feature[unique_id]
 
         # get the words A, B, Pronoun. Convert them to lower case, since we're using the uncased version of BERT
+        P = data.loc[unique_id, 'Pronoun'].lower()
         A = data.loc[unique_id, 'A'].lower()
         B = data.loc[unique_id, 'B'].lower()
 
-        # For each word, find the offset not counting spaces. This is necessary for comparison with the output of BERT
+        # Ranges
         P_offset = compute_offset_no_spaces(data.loc[unique_id, 'Text'], data.loc[unique_id, 'Pronoun-offset'])
+        P_length = count_length_no_special(P)
+        P_range = range(P_offset, P_offset + P_length)
         A_offset = compute_offset_no_spaces(data.loc[unique_id, 'Text'], data.loc[unique_id, 'A-offset'])
-        B_offset = compute_offset_no_spaces(data.loc[unique_id, 'Text'], data.loc[unique_id, 'B-offset'])
-        # Figure out the length of A, B, not counting spaces or special characters
         A_length = count_length_no_special(A)
+        A_range = range(A_offset, A_offset + A_length)
+        B_offset = compute_offset_no_spaces(data.loc[unique_id, 'Text'], data.loc[unique_id, 'B-offset'])
         B_length = count_length_no_special(B)
+        B_range = range(B_offset, B_offset + B_length)
 
         # Initialize counts
         count_chars = 0
         ids = {'A': [], 'B': [], 'P': []}
-        for j, token in enumerate(feature.tokens):
+        for j, token in enumerate(feature.tokens[1:]):
             # See if the character count until the current token matches the offset of any of the 3 target words
-            if count_chars == P_offset:
-                # print(token)
-                ids['P'].append(j)
-            if count_chars in range(A_offset, A_offset + A_length):
-                # print(token)
-                ids['A'].append(j)
-            if count_chars in range(B_offset, B_offset + B_length):
-                # print(token)
-                ids['B'].append(j)
+            if count_chars in P_range:
+                ids['P'].append(j+1)
+            if count_chars in A_range:
+                ids['A'].append(j+1)
+            if count_chars in B_range:
+                ids['B'].append(j+1)
             # Update the character count
             count_chars += count_length_no_special(token)
 
@@ -229,9 +229,11 @@ def main(_):
                 for id_from in ids[from_tok]:
                     for id_to in ids[to_tok]:
                         res[from_tok + to_tok].append(att_mat[id_from, id_to, :, :])
+        res['token'] = feature.tokens
         res['label'] = label
         res['ID'] = data.loc[unique_id, 'ID']
         pickle.dump(res, output_file)
+
     output_file.close()
 
 
