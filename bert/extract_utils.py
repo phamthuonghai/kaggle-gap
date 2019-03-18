@@ -2,8 +2,8 @@ import re
 
 import tensorflow as tf
 
-import modeling
-import tokenization
+from . import modeling
+from . import tokenization
 
 
 class InputExample(object):

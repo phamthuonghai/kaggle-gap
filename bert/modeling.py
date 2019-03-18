@@ -247,6 +247,7 @@ class BertModel(object):
     return self.all_encoder_layers
 
   def get_all_encoder_attention_matrices(self):
+    # [batch_size, from_length, to_length, num_layer, num_heads]
     return self.all_encoder_attention_matrices
 
   def get_embedding_output(self):
@@ -890,10 +891,11 @@ def transformer_model(input_tensor,
     for layer_output in all_layer_outputs:
       final_output = reshape_from_matrix(layer_output, input_shape)
       final_outputs.append(final_output)
-    return final_outputs, all_attention_matrices
+      # all_attention_matrices: [L, B, N, F, T] -> [batch_size, from_length, to_length, num_layer, num_heads]
+    return final_outputs, tf.transpose(tf.stack(all_attention_matrices), [1, 3, 4, 0, 2])
   else:
     final_output = reshape_from_matrix(prev_output, input_shape)
-    return final_output, all_attention_matrices[-1]
+    return final_output, tf.transpose(all_attention_matrices[-1], [0, 2, 3, 1])
 
 
 def get_shape_list(tensor, expected_rank=None, name=None):
