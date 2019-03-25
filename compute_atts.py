@@ -11,7 +11,7 @@ import pickle
 import pandas as pd
 import tensorflow as tf
 
-from utils import compute_offset_no_spaces, count_length_no_special
+from utils import compute_offset_no_spaces, token_length_no_space, count_chars_no_space
 from bert import modeling, tokenization
 from bert.extract_utils import input_fn_builder, convert_examples_to_features, InputExample
 
@@ -189,13 +189,13 @@ def main(_):
 
         # Ranges
         P_offset = compute_offset_no_spaces(data.loc[unique_id, 'Text'], data.loc[unique_id, 'Pronoun-offset'])
-        P_length = count_length_no_special(P)
+        P_length = count_chars_no_space(P)
         P_range = range(P_offset, P_offset + P_length)
         A_offset = compute_offset_no_spaces(data.loc[unique_id, 'Text'], data.loc[unique_id, 'A-offset'])
-        A_length = count_length_no_special(A)
+        A_length = count_chars_no_space(A)
         A_range = range(A_offset, A_offset + A_length)
         B_offset = compute_offset_no_spaces(data.loc[unique_id, 'Text'], data.loc[unique_id, 'B-offset'])
-        B_length = count_length_no_special(B)
+        B_length = count_chars_no_space(B)
         B_range = range(B_offset, B_offset + B_length)
 
         # Initialize counts
@@ -210,7 +210,7 @@ def main(_):
             if count_chars in B_range:
                 ids['B'].append(j+1)
             # Update the character count
-            count_chars += count_length_no_special(token)
+            count_chars += token_length_no_space(token)
 
         # Work out the label of the current piece of text
         label = 'Neither'

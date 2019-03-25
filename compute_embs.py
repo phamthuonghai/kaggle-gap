@@ -4,7 +4,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from utils import compute_offset_no_spaces, count_length_no_special
+from utils import compute_offset_no_spaces, token_length_no_space, count_chars_no_space
 
 
 def run_bert(data_name):
@@ -52,8 +52,8 @@ def run_bert(data_name):
         A_offset = compute_offset_no_spaces(data.loc[i, 'Text'], data.loc[i, 'A-offset'])
         B_offset = compute_offset_no_spaces(data.loc[i, 'Text'], data.loc[i, 'B-offset'])
         # Figure out the length of A, B, not counting spaces or special characters
-        A_length = count_length_no_special(A)
-        B_length = count_length_no_special(B)
+        A_length = count_chars_no_space(A)
+        B_length = count_chars_no_space(B)
 
         # Initialize embeddings with zeros
         emb_A = np.zeros(1024)
@@ -85,7 +85,7 @@ def run_bert(data_name):
                 emb_B += np.array(features.loc[j, 'layers'][0]['values'])
                 cnt_B += 1
             # Update the character count
-            count_chars += count_length_no_special(token)
+            count_chars += token_length_no_space(token)
         # Taking the average between tokens in the span of A or B, so divide the current value by the count
         emb_A /= cnt_A
         emb_B /= cnt_B

@@ -1,3 +1,6 @@
+import numpy as np
+
+
 def compute_offset_no_spaces(text, offset):
     count = 0
     for pos in range(offset):
@@ -6,19 +9,25 @@ def compute_offset_no_spaces(text, offset):
     return count
 
 
-def count_chars_no_special(text):
+def count_chars_no_space(text):
     count = 0
-    special_char_list = ['#']
     for pos in range(len(text)):
-        if text[pos] not in special_char_list:
+        if text[pos] != ' ':
             count += 1
     return count
 
 
-def count_length_no_special(text):
+def token_length_no_space(text):
     count = 0
-    special_char_list = ['#', ' ']
     for pos in range(len(text)):
-        if text[pos] not in special_char_list:
+        if text[pos] != ' ':
             count += 1
+    if text[:2] == '##':
+        count -= 2
     return count
+
+
+def softmax(x, axis=None):
+    x = x - x.max(axis=axis, keepdims=True)
+    y = np.exp(x)
+    return y / y.sum(axis=axis, keepdims=True)
