@@ -15,6 +15,7 @@ const HEIGHT = attention.inp_inp.bot_text.length * BOXHEIGHT * 2 + 100;
 const MATRIX_WIDTH = 150;
 const head_colours = d3.scale.category10();
 const CHECKBOX_SIZE = 20;
+const NUM_LAYERS = attention['inp_inp']['att'].length;
 
 function lighten(colour) {
   var c = d3.hsl(colour);
@@ -342,7 +343,7 @@ function render() {
 }
 
 $("#layer").empty();
-for(var i=0; i<6; i++) {
+for(var i=0; i<NUM_LAYERS; i++) {
   $("#layer").append($("<option />").val(i).text(i));
 }
 
