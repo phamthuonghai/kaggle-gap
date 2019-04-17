@@ -1,13 +1,18 @@
 import time
+import pickle as pkl
 
 import numpy as np
 import pandas as pd
 from keras import callbacks as kc
 from keras import models, layers, regularizers, optimizers
 from sklearn.metrics import log_loss
-from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 
-model_name = 'pretrained-mlp'
+# OOF_NAME, DATA, DIM = 'nn_large_emb_gap', 'large-emb-gap', 1024
+OOF_NAME, DATA, DIM = 'nn_base_emb_gap', 'base-emb-gap', 768
+# OOF_NAME, DATA, DIM = 'elmo_emb_gap', 'elmo-emb-gap', 1024
+USE_ALL = False
+
 dense_layer_sizes = [37]
 dropout_rate = 0.6
 learning_rate = 0.001
@@ -18,6 +23,29 @@ patience = 100
 # n_test = 100
 lambd = 0.1  # L2 regularization
 
+def get_data(filename):
+    ids = []
+    labels = []
+    with open(filename, 'rb') as f:
+        while 1:
+            try:
+                d = pkl.load(f)
+                labels.append(d['label'])
+                ids.append(d['ID'])
+            except EOFError:
+                break
+    return ids, labels
+
+def convert_label(Y_train):
+    Y_train_ones = []
+    for y in Y_train:
+        if y == 'A':
+            Y_train_ones.append(0)
+        elif y == 'B':
+            Y_train_ones.append(1)
+        else:
+            Y_train_ones.append(2)
+    return Y_train_ones
 
 def build_mlp_model(input_shape):
     X_input = layers.Input(input_shape)
@@ -39,7 +67,7 @@ def build_mlp_model(input_shape):
     X = layers.Activation('softmax')(X)
 
     # Create model
-    model = models.Model(input=X_input, output=X, name='classif_model')
+    model = models.Model(inputs=X_input, outputs=X, name='classif_model')
     return model
 
 
@@ -58,7 +86,7 @@ def parse_json(embeddings):
     """
     embeddings.sort_index(
         inplace=True)  # Sorting the DataFrame, because reading from the json file messed with the order
-    X = np.zeros((len(embeddings), 3 * 1024))
+    X = np.zeros((len(embeddings), 3 * DIM))
     Y = np.zeros((len(embeddings), 3))
 
     # Concatenate features
@@ -77,77 +105,89 @@ def parse_json(embeddings):
             Y[i, 1] = 1
         else:
             Y[i, 2] = 1
-
+    np.nan_to_num(X, copy=False)
     return X, Y
 
 
+IDs_train1, Y_train1 = get_data('data/large-atts-gap-validation.pkl')
+IDs_train2, Y_train2  = get_data('data/large-atts-gap-test.pkl')
+IDs_test, Y_test  = get_data('data/large-atts-gap-development.pkl')
+
+if USE_ALL:
+    IDs_train = IDs_train1 + IDs_train2 + IDs_test
+    Y_train = Y_train1 + Y_train2 + Y_test
+else:
+    IDs_train = IDs_train1 + IDs_train2
+    Y_train = Y_train1 + Y_train2
+
+Y_train_ones = convert_label(Y_train)
+
 # Read development embeddings from json file - this is the output of Bert
-development = pd.read_json('data/large-emb-gap-development.json')
-X_development, Y_development = parse_json(development)
+development = pd.read_json('data/%s-development.json' % DATA)
+validation = pd.read_json('data/%s-validation.json'% DATA)
+test = pd.read_json('data/%s-test.json'% DATA)
 
-validation = pd.read_json('data/large-emb-gap-validation.json')
-X_validation, Y_validation = parse_json(validation)
+new_train = pd.concat([validation, test])
+new_train = new_train.reset_index(drop=True)
 
-test = pd.read_json('data/large-emb-gap-test.json')
-X_test, Y_test = parse_json(test)
+X_train, Y_train = parse_json(new_train)
 
-# There may be a few NaN values, where the offset of a target word is greater than the max_seq_length of BERT.
-# They are very few, so I'm just dropping the rows.
-remove_test = [row for row in range(len(X_test)) if np.sum(np.isnan(X_test[row]))]
-X_test = np.delete(X_test, remove_test, 0)
-Y_test = np.delete(Y_test, remove_test, 0)
+X_test, Y_test = parse_json(development)
 
-remove_validation = [row for row in range(len(X_validation)) if np.sum(np.isnan(X_validation[row]))]
-X_validation = np.delete(X_validation, remove_validation, 0)
-Y_validation = np.delete(Y_validation, remove_validation, 0)
-
-# We want predictions for all development rows. So instead of removing rows, make them 0
-remove_development = [row for row in range(len(X_development)) if np.sum(np.isnan(X_development[row]))]
-X_development[remove_development] = np.zeros(3 * 1024)
-
-# Will train on data from the gap-test and gap-validation files, in total 2454 rows
-X_train = np.concatenate((X_test, X_validation), axis=0)
-Y_train = np.concatenate((Y_test, Y_validation), axis=0)
-
-# Will predict probabilities for data from the gap-development file; initializing the predictions
-prediction = np.zeros((len(X_development), 3))  # testing predictions
+NTRAIN, NTEST = len(X_train), len(X_test)
+print(OOF_NAME, DATA, X_train.shape, X_test.shape)
+N_CLASSES = 3
+OOF_TRAIN = np.zeros((NTRAIN, N_CLASSES))
+OOF_TEST = np.zeros((NTEST, N_CLASSES))
+val_score_list = []
 
 # Training and cross-validation
-folds = KFold(n_splits=n_fold, shuffle=True, random_state=3)
-scores = []
-for fold_n, (train_index, valid_index) in enumerate(folds.split(X_train)):
+KFOLD, SHUF, RS = 5, True, 123
+kf = StratifiedKFold(n_splits=KFOLD, shuffle=SHUF, random_state=RS)
+for fold_n, (train_index, valid_index) in enumerate(kf.split(X_train, Y_train_ones)):
     # split training and validation data
-    print('Fold', fold_n, 'started at', time.ctime())
+    print('Fold #%d' % fold_n, end=' ')
     X_tr, X_val = X_train[train_index], X_train[valid_index]
     Y_tr, Y_val = Y_train[train_index], Y_train[valid_index]
 
     # Define the model, re-initializing for each fold
     classif_model = build_mlp_model([X_train.shape[1]])
     classif_model.compile(optimizer=optimizers.Adam(lr=learning_rate), loss='categorical_crossentropy')
-    callbacks = [kc.EarlyStopping(monitor='val_loss', patience=patience, restore_best_weights=True),
-                 kc.TensorBoard(log_dir=f'logs/{model_name}/{fold_n}')]
+
+    file_path = "models/%s_%s.hdf5" % (OOF_NAME, fold_n)
+    check_point = kc.ModelCheckpoint(file_path, monitor = "val_loss", verbose = 0, save_best_only = True, mode = "min")
+    early_stop = kc.EarlyStopping(monitor = "val_loss", mode = "min", patience=100, restore_best_weights = True)
 
     # train the model
-    classif_model.fit(x=X_tr, y=Y_tr, epochs=epochs, batch_size=batch_size, callbacks=callbacks,
+    classif_model.fit(x=X_tr, y=Y_tr, epochs=epochs, batch_size=batch_size, callbacks=[check_point, early_stop],
                       validation_data=(X_val, Y_val), verbose=0)
 
     # make predictions on validation and test data
     pred_valid = classif_model.predict(x=X_val, verbose=0)
-    pred = classif_model.predict(x=X_development, verbose=0)
+    test_preds = classif_model.predict(x=X_test, verbose=0)
 
-    # oof[valid_index] = pred_valid.reshape(-1,)
-    scores.append(log_loss(Y_val, pred_valid))
-    prediction += pred
-prediction /= n_fold
+    err_test = log_loss(Y_test, test_preds)
+    err = log_loss(Y_val, pred_valid)
+#     print(pred_valid.shape)
+#     OOF_TRAIN[valid_index] = pred_valid
+    
+    print('Log Loss (val - test): %.5f - %.5f' % (err, err_test))
+    val_score_list.append(err)
+    OOF_TEST += test_preds
+    
+OOF_TEST /= KFOLD
 
-# Print CV scores, as well as score on the test data
-print('CV mean score: {0:.4f}, std: {1:.4f}.'.format(np.mean(scores), np.std(scores)))
-print(scores)
-print('Test score:', log_loss(Y_development, prediction))
 
-# Write the prediction to file for submission
-submission = pd.read_csv('input/sample_submission_stage_1.csv', index_col='ID')
-submission['A'] = prediction[:, 0]
-submission['B'] = prediction[:, 1]
-submission['NEITHER'] = prediction[:, 2]
-submission.to_csv(f'output/{model_name}.csv')
+print("Average %.5f - %.5f" % (np.mean(val_score_list), log_loss(Y_test, OOF_TEST)))
+
+submission = pd.DataFrame(OOF_TEST, columns=['A', 'B', 'NEITHER'])
+submission['ID'] = IDs_test
+submission.set_index('ID', inplace=True)
+submission.to_csv(f'output/' + OOF_NAME + '.csv')
+
+train_oof = pd.DataFrame(OOF_TRAIN, columns=['A', 'B', 'NEITHER'])
+train_oof['ID'] = IDs_train
+train_oof.set_index('ID', inplace=True)
+train_oof['label'] = Y_train_ones
+train_oof.to_csv(f'oof/' + OOF_NAME + '.csv')
+

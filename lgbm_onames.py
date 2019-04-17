@@ -9,25 +9,20 @@ import lightgbm as lgb
 from sklearn.metrics import log_loss
 from sklearn.model_selection import KFold, StratifiedKFold
 
-# OOF_NAME, DATA = 'lgbm_large_gap', 'large-atts-gap'
-# OOF_NAME, DATA = 'lgbm_large_mgap', 'large-atts-mgap'
+OOF_NAME, DATA = 'lgbm_large_onames', 'large-onames-atts-gap'
 
-# OOF_NAME, DATA = 'lgbm_base_gap', 'base-atts-gap'
-# OOF_NAME, DATA = 'lgbm_base_mgap', 'base-atts-mgap'
-
-# OOF_NAME, DATA = 'lgbm_gpt2_gap', 'gpt2-atts-gap'
-
-
-# OOF_NAME, DATA = 'lgbm_clarge_gap', 'clarge-atts-gap'
-# OOF_NAME, DATA = 'lgbm_mbase_gap', 'mbase-atts-gap'
-# OOF_NAME, DATA = 'lgbm_mcbase_gap', 'mcbase-atts-gap'
-
-USE_ALL = True
+USE_ALL = False
 
 def softmax(x, axis=None):
     x = x - x.max(axis=axis, keepdims=True)
     y = np.exp(x)
     return y / y.sum(axis=axis, keepdims=True)
+
+def max_list(array_list):
+    max_att = array_list[0]
+    for att in array_list[1:]:
+        max_att = np.maximum(max_att, att)
+    return max_att.flatten()
 
 def get_data(filename):
     ids = []
@@ -38,36 +33,27 @@ def get_data(filename):
             try:
                 d = pkl.load(f)
                 features = []
-                ### BERT
-                for lb in ['PA', 'PB', 'AP', 'BP', 'AB', 'BA']:
-                    if len(d[lb]) == 0:
-                        break
-                    att_tensor = np.array(d[lb])
-                    max_att = np.max(att_tensor, axis=0)
-                    features.append(max_att[:, :].flatten())
-
-                ### GPT2
-#                 for lb, lb1 in [('PA', 'AP'), ('PB','BP'), ('BA', 'AB')]:
-#                     if len(d[lb]) == 0 and len(d[lb1]) == 0:
-#                         break
-#                     att_tensor = np.array(d[lb])
-#                     max_att = np.max(att_tensor, axis=0)
-#                     att_tensor1 = np.array(d[lb1])
-#                     max_att1 = np.max(att_tensor1, axis=0)
-#                     new_max_att = max_att - max_att1
-#                     if new_max_att.sum() == 0:
-#                         print("Zeros", lb, len(data))
-#                     features.append(new_max_att[:, :].flatten())
-
+                for from_tok, to_tok in itertools.product(['A', 'B', 'P'], repeat=2):
+                    if from_tok != to_tok:
+                        lb = from_tok + to_tok
+                        if len(d[lb]) == 0:
+                            break
+                        d[lb] = max_list(d[lb])
+                        features.append(d[lb])
                 if len(d[lb]) == 0:
                     features.append(np.zeros_like(data[-1]))
-                    print("Zeros row at", d['ID'])
+                else:
+                    d['PN'] = np.zeros(shape=d['AP'].shape) if len(d['PN']) == 0 else max_list(d['PN'])
+                    d['NP'] = np.zeros(shape=d['AP'].shape) if len(d['NP']) == 0 else max_list(d['NP'])
+                    features += [d['PN'], d['NP']]
                 labels.append(d['label'])
                 ids.append(d['ID'])
+#                 data.append(np.concatenate(features + [(d['PA']-d['PB']).flatten(), (d['AP']-d['BP']).flatten()]))
                 data.append(np.concatenate(features))
             except EOFError:
                 break
     return ids, data, labels
+
 
 def convert_label(Y_train):
     Y_train_ones = []

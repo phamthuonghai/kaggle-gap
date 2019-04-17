@@ -5,24 +5,16 @@ import time
 
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
+import xgboost as xgb
 from sklearn.metrics import log_loss
 from sklearn.model_selection import KFold, StratifiedKFold
 
-# OOF_NAME, DATA = 'lgbm_large_gap', 'large-atts-gap'
-# OOF_NAME, DATA = 'lgbm_large_mgap', 'large-atts-mgap'
+# OOF_NAME, DATA = 'xgb_large_gap', 'large-atts-gap'
+# OOF_NAME, DATA = 'xgb_large_mgap', 'large-atts-mgap'
 
-# OOF_NAME, DATA = 'lgbm_base_gap', 'base-atts-gap'
-# OOF_NAME, DATA = 'lgbm_base_mgap', 'base-atts-mgap'
-
-# OOF_NAME, DATA = 'lgbm_gpt2_gap', 'gpt2-atts-gap'
-
-
-# OOF_NAME, DATA = 'lgbm_clarge_gap', 'clarge-atts-gap'
-# OOF_NAME, DATA = 'lgbm_mbase_gap', 'mbase-atts-gap'
-# OOF_NAME, DATA = 'lgbm_mcbase_gap', 'mcbase-atts-gap'
-
-USE_ALL = True
+# OOF_NAME, DATA = 'xgb_base_gap', 'base-atts-gap'
+OOF_NAME, DATA = 'xgb_base_mgap', 'base-atts-mgap'
+USE_ALL = False
 
 def softmax(x, axis=None):
     x = x - x.max(axis=axis, keepdims=True)
@@ -38,7 +30,6 @@ def get_data(filename):
             try:
                 d = pkl.load(f)
                 features = []
-                ### BERT
                 for lb in ['PA', 'PB', 'AP', 'BP', 'AB', 'BA']:
                     if len(d[lb]) == 0:
                         break
@@ -46,18 +37,23 @@ def get_data(filename):
                     max_att = np.max(att_tensor, axis=0)
                     features.append(max_att[:, :].flatten())
 
-                ### GPT2
-#                 for lb, lb1 in [('PA', 'AP'), ('PB','BP'), ('BA', 'AB')]:
-#                     if len(d[lb]) == 0 and len(d[lb1]) == 0:
+#                     mean_att = np.mean(att_tensor, axis=0)
+#                     features.append(mean_att[17:18, :].flatten())
+
+#                     min_att = np.min(att_tensor, axis=0)
+#                     features.append(min_att[17:18, :].flatten())
+#                 for lb in ['AP', 'BP']:
+#                     if len(d[lb]) == 0:
 #                         break
 #                     att_tensor = np.array(d[lb])
 #                     max_att = np.max(att_tensor, axis=0)
-#                     att_tensor1 = np.array(d[lb1])
-#                     max_att1 = np.max(att_tensor1, axis=0)
-#                     new_max_att = max_att - max_att1
-#                     if new_max_att.sum() == 0:
-#                         print("Zeros", lb, len(data))
-#                     features.append(new_max_att[:, :].flatten())
+#                     features.append(max_att[:, :].flatten())
+
+#                     mean_att = np.mean(att_tensor, axis=0)
+#                     features.append(mean_att[16:20, :].flatten())
+
+#                     min_att = np.min(att_tensor, axis=0)
+#                     features.append(min_att[16:20, :].flatten())
 
                 if len(d[lb]) == 0:
                     features.append(np.zeros_like(data[-1]))
@@ -80,9 +76,9 @@ def convert_label(Y_train):
             Y_train_ones.append(2)
     return Y_train_ones
 
-IDs_train1, X_train1, Y_train1 = get_data('data/%s-validation.pkl' %DATA)
-IDs_train2, X_train2, Y_train2 = get_data('data/%s-test.pkl'%DATA)
-IDs_test, X_test, Y_test = get_data('data/%s-development.pkl'%DATA)
+IDs_train1, X_train1, Y_train1 = get_data('./data/%s-validation.pkl' %DATA)
+IDs_train2, X_train2, Y_train2 = get_data('./data/%s-test.pkl'%DATA)
+IDs_test, X_test, Y_test = get_data('./data/%s-development.pkl'%DATA)
 if USE_ALL:
     IDs_train = IDs_train1 + IDs_train2 + IDs_test
     X_train = X_train1 + X_train2 + X_test
@@ -98,26 +94,23 @@ Y_test_ones = convert_label(Y_test)
 
 X, y = np.array(X_train), np.array(Y_train_ones)
 X_test, y_test = np.array(X_test), np.array(Y_test_ones)
-pkl.dump(y_test, open("data/y_test.pkl", "wb"))
 N_CLASSES = 3
-EARLY_STOPPING=300
-lgbm_params =  {
-    'task': 'train',
-    'boosting_type': 'gbdt',
-    'objective': 'multiclass',
-    'num_class': N_CLASSES,
-    'metric': 'multi_logloss',
-    'max_depth': 4,
-    'num_leaves': 32,
-    'feature_fraction': 0.1,
-    # 'bagging_fraction': 0.8,
-    # 'bagging_freq': 5,
-    'learning_rate': 0.02,
-    'lambda_l1': 0.0,
-    'lambda_l2': 0.0,
-    'verbose': -1,
-    'nthread': 12
-}  
+EARLY_STOPPING=100
+Dparam = {'objective' : "multi:softmax",
+          'booster' : "gbtree",
+          'eval_metric' : "mlogloss",
+          'num_class': N_CLASSES,
+          'nthread' : 12,
+          'eta':0.05,
+          'max_depth':10,
+          'min_child_weight': 11,
+          'gamma' :0,
+          'subsample':1.0,
+          'colsample_bytree':0.3,
+          # 'alpha': 1.5,
+          'lambda':0,
+          'silent': 1}    
+
 
 print(OOF_NAME, DATA, X.shape, X_test.shape)
 
@@ -126,35 +119,33 @@ OOF_TRAIN = np.zeros((NTRAIN, N_CLASSES))
 OOF_TEST = np.zeros((NTEST, N_CLASSES))
 val_score_list = []
 kf = StratifiedKFold(n_splits=KFOLD, shuffle=SHUF, random_state=RS)
-
+dtest = xgb.DMatrix(data=X_test)
 for i, (train_idx, val_idx) in enumerate(kf.split(X, y)):
     print("FOLD #", i, end=' ')
     X_train, y_train = X[train_idx], y[train_idx]
     X_valid, y_valid = X[val_idx], y[val_idx]
     
-    lgtrain = lgb.Dataset(X_train, y_train)
-    lgvalid = lgb.Dataset(X_valid, y_valid)
+    dtrain = xgb.DMatrix(X_train, y_train)
+    dval = xgb.DMatrix(X_valid, y_valid)
 
     modelstart = time.time()
-    lgb_clf = lgb.train(
-        lgbm_params,
-        lgtrain,
-        num_boost_round=1000,
-        valid_sets=[lgvalid],
-        valid_names=['valid'],
+    xgb_clf = xgb.train(
+        Dparam,
+        dtrain,
+        num_boost_round=1500,
+        evals=[(dval, 'eval')],
         early_stopping_rounds=EARLY_STOPPING,
-        verbose_eval=False
+        verbose_eval=False,
     )
-    
-    pkl.dump(lgb_clf, open("models/%s_%s.pkl"%(OOF_NAME, i), 'wb'))
-    val_preds = lgb_clf.predict(X_valid)
-    err = log_loss(y_valid, val_preds)
-    test_preds = lgb_clf.predict(X_test, raw_score=True)
+    pkl.dump(xgb_clf, open("models/%s_%s.pkl"%(OOF_NAME, i), 'wb'))
+    test_preds = xgb_clf.predict(dtest, ntree_limit=xgb_clf.best_ntree_limit, output_margin=True)
     test_preds = softmax(test_preds, axis=1)
     err_test = log_loss(y_test, test_preds)
     OOF_TEST += test_preds
-    val_preds = lgb_clf.predict(X_valid, raw_score=True)
+    
+    val_preds = xgb_clf.predict(dval, ntree_limit=xgb_clf.best_ntree_limit, output_margin=True)
     val_preds = softmax(val_preds, axis=1)
+    err = log_loss(y_valid, val_preds)
     OOF_TRAIN[val_idx] = val_preds
 
     print('Log Loss (val - test): %.5f - %.5f' % (err, err_test))
@@ -163,7 +154,7 @@ for i, (train_idx, val_idx) in enumerate(kf.split(X, y)):
 
 OOF_TEST /= KFOLD
 # print("Loss folds", val_score_list)
-print("Average %.5f - %.5f" % (np.mean(val_score_list), log_loss(y_test, OOF_TEST)))
+print("Average %.5f - %.5f" % ((sum(val_score_list)/KFOLD), log_loss(y_test, OOF_TEST)))
 
 submission = pd.DataFrame(OOF_TEST, columns=['A', 'B', 'NEITHER'])
 submission['ID'] = IDs_test
@@ -175,5 +166,3 @@ train_oof['ID'] = IDs_train
 train_oof.set_index('ID', inplace=True)
 train_oof['label'] = Y_train_ones
 train_oof.to_csv(f'oof/' + OOF_NAME + '.csv')
-
-

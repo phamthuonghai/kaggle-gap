@@ -10,6 +10,7 @@ import pickle
 
 import pandas as pd
 import tensorflow as tf
+import spacy
 
 from utils import compute_offset_no_spaces, token_length_no_space, count_chars_no_space
 from bert import modeling, tokenization
@@ -138,6 +139,8 @@ def convert_to_examples(texts):
 def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
 
+    spacy_nlp = spacy.load('en')
+
     bert_config = modeling.BertConfig.from_json_file(FLAGS.bert_config_file)
 
     tokenizer = tokenization.FullTokenizer(
@@ -198,9 +201,14 @@ def main(_):
         B_length = count_chars_no_space(B)
         B_range = range(B_offset, B_offset + B_length)
 
+        other_names = []
+        for ent in spacy_nlp(data.loc[unique_id, 'Text']).ents:
+            if ent.label_ == 'PERSON':
+                other_names.append(range(ent.start_char, ent.end_char))
+
         # Initialize counts
         count_chars = 0
-        ids = {'A': [], 'B': [], 'P': []}
+        ids = {'A': [], 'B': [], 'P': [], 'N': []}
         for j, token in enumerate(feature.tokens[1:]):
             # See if the character count until the current token matches the offset of any of the 3 target words
             if count_chars in P_range:
@@ -209,15 +217,20 @@ def main(_):
                 ids['A'].append(j+1)
             if count_chars in B_range:
                 ids['B'].append(j+1)
+
+            for other_name in other_names:
+                if count_chars in other_name:
+                    ids['N'].append(j+1)
+
             # Update the character count
             count_chars += token_length_no_space(token)
 
         # Work out the label of the current piece of text
-        # label = 'Neither'
-        # if data.loc[unique_id, 'A-coref']:
-        #     label = 'A'
-        # if data.loc[unique_id, 'B-coref']:
-        #     label = 'B'
+        label = 'Neither'
+        if data.loc[unique_id, 'A-coref']:
+            label = 'A'
+        if data.loc[unique_id, 'B-coref']:
+            label = 'B'
 
         # att_mat: [from_length, to_length, num_layer, num_heads]
         att_mat = result["attention_matrices"]
@@ -229,8 +242,16 @@ def main(_):
                 for id_from in ids[from_tok]:
                     for id_to in ids[to_tok]:
                         res[from_tok + to_tok].append(att_mat[id_from, id_to, :, :])
+
+        res['PN'] = []
+        res['NP'] = []
+        for id_from in ids['P']:
+            for id_to in ids['N']:
+                res['PN'].append(att_mat[id_from, id_to, :, :])
+                res['NP'].append(att_mat[id_to, id_from, :, :])
+
         res['token'] = feature.tokens
-        # res['label'] = label
+        res['label'] = label
         res['ID'] = data.loc[unique_id, 'ID']
         pickle.dump(res, output_file)
 
